@@ -37,7 +37,10 @@ class TestPlayer(unittest.TestCase):
         # Mock pygame.time.set_timer to avoid errors
         dotsnake.pygame.time.set_timer = MagicMock()
         dotsnake.pygame.time.get_ticks.return_value = 0
-        self.player = dotsnake.Player()
+        
+        # Mock ParticleSystem
+        mock_particle_system = MagicMock()
+        self.player = dotsnake.Player(mock_particle_system)
 
     def test_initialization(self):
         self.assertEqual(len(self.player.body), 3)
@@ -104,7 +107,7 @@ class TestBullet(unittest.TestCase):
     def test_initialization_standard(self):
         bullet = dotsnake.Bullet(100, 100, 1, 0, "standard")
         self.assertEqual(bullet.penetration, 1)
-        self.assertEqual(bullet.vx, 15)
+        self.assertEqual(bullet.vx, 900)
 
     def test_initialization_charge(self):
         bullet = dotsnake.Bullet(100, 100, 1, 0, "charge")

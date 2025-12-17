@@ -39,6 +39,16 @@ COLOR_WALL_CRACKED = (100, 100, 120)  # Blue-ish Grey
 COLOR_BULLET_STANDARD = (200, 255, 255) # Cyan tint
 COLOR_BULLET_CHARGE = (255, 150, 200)   # Pink tint
 
+# --- Global Game Time System ---
+GAME_TIME_OFFSET = 0
+GAME_PAUSE_START = 0
+GAME_IS_PAUSED = False
+
+def get_game_time():
+    if GAME_IS_PAUSED:
+        return GAME_PAUSE_START - GAME_TIME_OFFSET
+    return pygame.time.get_ticks() - GAME_TIME_OFFSET
+
 # --- Asset Management ---
 ASSETS = {}
 
@@ -67,6 +77,7 @@ def load_assets():
     ASSETS['dot'] = load_img('dotsnake_dot.png', (GRID_SIZE, GRID_SIZE))
     ASSETS['virus'] = load_img('dotsnake_virus.png', (GRID_SIZE, GRID_SIZE))
     ASSETS['barrier'] = load_img('dotsnake_barrier.png', (GRID_SIZE, GRID_SIZE))
+    ASSETS['title'] = load_img('dotsnake_title.png', (400, 100))
     
     # Load Font
     font_path = os.path.join(asset_dir, 'PressStart2P-Regular.ttf')
@@ -80,6 +91,7 @@ def load_assets():
 
     # Pre-tint assets for performance
     ASSETS['dot_head'] = get_tinted_image(ASSETS['dot'], COLOR_PLAYER_GREEN)
+    ASSETS['dot_body'] = ASSETS['dot']  # Use raw texture as requested
     ASSETS['dot_standard'] = get_tinted_image(ASSETS['dot'], COLOR_DOT_RED)
     ASSETS['dot_charge'] = get_tinted_image(ASSETS['dot'], COLOR_DOT_YELLOW)
     ASSETS['dot_shield'] = get_tinted_image(ASSETS['dot'], COLOR_DOT_BLUE)
@@ -236,7 +248,479 @@ SPEED_INCREASE_AMOUNT = 5 # Pengurangan delay
 def lerp(start, end, t):
     return start + (end - start) * t
 
-# --- Particle System ---
+# --- Demo Snake for Menu Background ---
+class DemoSnake:
+    def __init__(self, start_x=None, start_y=None, initial_dir=(1, 0)):
+        # Random start position if not provided
+        max_x = SCREEN_WIDTH // GRID_SIZE
+        max_y = (SCREEN_HEIGHT - HUD_HEIGHT) // GRID_SIZE
+        
+        if start_x is None:
+            start_x = random.randint(5, max_x - 5)
+        if start_y is None:
+            start_y = random.randint(5, max_y - 5)
+            
+        self.body = [(start_x - i * initial_dir[0], start_y - i * initial_dir[1]) for i in range(6)]
+        self.dx, self.dy = initial_dir
+        self.move_timer = random.randint(0, 100)  # Randomize start timing
+        self.move_delay = 100  # ms between moves
+        self.direction_timer = random.randint(0, 1500)
+        self.direction_change_interval = random.randint(1500, 3000)
+        self.alpha = random.randint(80, 150)  # Random transparency
+        
+    def update(self, dt_ms):
+        self.move_timer += dt_ms
+        self.direction_timer += dt_ms
+        
+        # Random direction change
+        if self.direction_timer >= self.direction_change_interval:
+            self.direction_timer = 0
+            self.direction_change_interval = random.randint(1500, 3000)
+            self._pick_new_direction()
+        
+        # Move snake
+        if self.move_timer >= self.move_delay:
+            self.move_timer = 0
+            
+            # Get new head position
+            head_x, head_y = self.body[0]
+            new_x = head_x + self.dx
+            new_y = head_y + self.dy
+            
+            # Wrap around screen edges
+            max_x = SCREEN_WIDTH // GRID_SIZE
+            max_y = (SCREEN_HEIGHT - HUD_HEIGHT) // GRID_SIZE
+            
+            if new_x < 0:
+                new_x = max_x - 1
+                self._pick_new_direction()
+            elif new_x >= max_x:
+                new_x = 0
+                self._pick_new_direction()
+            if new_y < 0:
+                new_y = max_y - 1
+                self._pick_new_direction()
+            elif new_y >= max_y:
+                new_y = 0
+                self._pick_new_direction()
+            
+            # Move: add new head, remove tail
+            self.body.insert(0, (new_x, new_y))
+            self.body.pop()
+    
+    def _pick_new_direction(self):
+        choices = []
+        if self.dx == 0:  # Currently moving vertically
+            choices = [(1, 0), (-1, 0)]
+        else:  # Currently moving horizontally
+            choices = [(0, 1), (0, -1)]
+        
+        # Add straight ahead as an option too
+        choices.append((self.dx, self.dy))
+        
+        choice = random.choice(choices)
+        self.dx, self.dy = choice
+    
+    def draw(self, screen):
+        for i, (x, y) in enumerate(self.body):
+            # Use actual game sprites with alpha
+            if i == 0:
+                # Head - rotate based on direction
+                sprite = ASSETS.get('dot_head')
+                if sprite:
+                    # Calculate rotation angle based on direction (Match Player.draw: UP is default)
+                    angle = 0
+                    if self.dx == 1:  # Right
+                        angle = -90
+                    elif self.dx == -1:  # Left
+                        angle = 90
+                    elif self.dy == 1:  # Down
+                        angle = 180
+                    elif self.dy == -1:  # Up
+                        angle = 0
+                    
+                    rotated = pygame.transform.rotate(sprite, angle)
+                    rotated.set_alpha(self.alpha)
+                    # Center the rotated sprite
+                    rect = rotated.get_rect(center=(x * GRID_SIZE + GRID_SIZE // 2, y * GRID_SIZE + GRID_SIZE // 2))
+                    screen.blit(rotated, rect)
+                else:
+                    self._draw_circle_fallback(screen, x, y, i)
+            else:
+                # Body
+                sprite = ASSETS.get('dot_body')
+                # Robust fallback: if dot_body missing, try generic dot
+                if not sprite and 'dot' in ASSETS:
+                    sprite = ASSETS['dot']
+                    
+                if sprite:
+                    s = sprite.copy()
+                    s.set_alpha(self.alpha)  # Constant alpha (no fade)
+                    screen.blit(s, (x * GRID_SIZE, y * GRID_SIZE))
+                else:
+                    self._draw_circle_fallback(screen, x, y, i)
+    
+    def _draw_circle_fallback(self, screen, x, y, i):
+        alpha = max(30, self.alpha - (i * 10))
+        color = (*COLOR_PLAYER_GREEN, alpha) if i == 0 else (50, 180, 80, alpha)
+        surf = pygame.Surface((GRID_SIZE, GRID_SIZE), pygame.SRCALPHA)
+        pygame.draw.circle(surf, color, (GRID_SIZE//2, GRID_SIZE//2), GRID_SIZE//2 - 2)
+        screen.blit(surf, (x * GRID_SIZE, y * GRID_SIZE))
+
+# --- Menu System ---
+class Menu:
+    def __init__(self):
+        self.state = "MAIN" # MAIN, OPTIONS
+        self.main_options = ["START", "OPTIONS", "QUIT"]
+        
+        # Settings
+        self.sound_on = True
+        self.graphics_high = True
+        
+        self.selected_index = 0
+        # Create multiple demo snakes with different starting positions
+        # Create multiple demo snakes with different positions
+        self.demo_snakes = [
+            DemoSnake(start_x=5, start_y=8, initial_dir=(1, 0)),
+            DemoSnake(start_x=25, start_y=15, initial_dir=(-1, 0)),
+            DemoSnake(start_x=15, start_y=5, initial_dir=(0, 1)),
+            DemoSnake(start_x=10, start_y=20, initial_dir=(1, 0)),
+            DemoSnake(start_x=30, start_y=10, initial_dir=(0, 1)),
+            DemoSnake(start_x=8, start_y=30, initial_dir=(-1, 0)),
+            DemoSnake(start_x=20, start_y=25, initial_dir=(1, 0)),
+            DemoSnake(start_x=35, start_y=35, initial_dir=(0, -1)),
+            DemoSnake(start_x=3, start_y=40, initial_dir=(1, 0)),
+            DemoSnake(start_x=12, start_y=12, initial_dir=(-1, 0)),
+        ]
+        
+    def get_options_list(self):
+        if self.state == "MAIN":
+            return self.main_options
+        elif self.state == "OPTIONS":
+            return [
+                f"SOUND: {'ON' if self.sound_on else 'OFF'}",
+                f"GRAPHICS: {'HIGH' if self.graphics_high else 'LOW'}",
+                "GUIDE",
+                "BACK"
+            ]
+        return []
+
+    def update(self, dt_ms):
+        for snake in self.demo_snakes:
+            snake.update(dt_ms)
+        
+    def draw(self, screen):
+        # Draw all demo snakes FIRST (behind everything)
+        for snake in self.demo_snakes:
+            snake.draw(screen)
+        
+        # Dark overlay (reduced opacity so snakes show through better)
+        overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
+        overlay.fill((10, 10, 20, 140))
+        screen.blit(overlay, (0,0))
+            
+        # Draw Title
+        if 'title' in ASSETS:
+            title_rect = ASSETS['title'].get_rect(center=(SCREEN_WIDTH//2, SCREEN_HEIGHT//2 - 120))
+            screen.blit(ASSETS['title'], title_rect)
+        else:
+            title_surf = ASSETS['font_large'].render("DOTSNAKE", True, COLOR_WHITE)
+            title_rect = title_surf.get_rect(center=(SCREEN_WIDTH//2, SCREEN_HEIGHT//2 - 120))
+            screen.blit(title_surf, title_rect)
+            
+        # Draw Buttons with filled style
+        btn_width = 300
+        btn_height = 50
+        btn_y_start = SCREEN_HEIGHT // 2 + 20
+        btn_spacing = 60
+        
+        options = self.get_options_list()
+        
+        for i, option in enumerate(options):
+            btn_x = SCREEN_WIDTH // 2 - btn_width // 2
+            btn_y = btn_y_start + (i * btn_spacing)
+            btn_rect = pygame.Rect(btn_x, btn_y, btn_width, btn_height)
+            
+            is_selected = (i == self.selected_index)
+            
+            # Button background
+            if is_selected:
+                # Selected: filled red color
+                pygame.draw.rect(screen, (180, 50, 50), btn_rect)
+                pygame.draw.rect(screen, (255, 100, 100), btn_rect, 3)
+                text_color = (255, 255, 255)
+            else:
+                # Not selected: dark with border
+                pygame.draw.rect(screen, (40, 40, 50), btn_rect)
+                pygame.draw.rect(screen, (80, 80, 100), btn_rect, 2)
+                text_color = (150, 150, 150)
+            
+            # Draw Text
+            text_surf = ASSETS['font'].render(option, True, text_color)
+            text_rect = text_surf.get_rect(center=btn_rect.center)
+            screen.blit(text_surf, text_rect)
+        
+        # Navigation hint
+        hint = ASSETS['font'].render("Use ARROWS to navigate, ENTER to select", True, (80, 80, 80))
+        screen.blit(hint, (SCREEN_WIDTH//2 - hint.get_width()//2, SCREEN_HEIGHT - 60))
+            
+    def handle_event(self, event):
+        options = self.get_options_list()
+        
+        if event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_UP:
+                self.selected_index = (self.selected_index - 1) % len(options)
+            elif event.key == pygame.K_DOWN:
+                self.selected_index = (self.selected_index + 1) % len(options)
+            elif event.key == pygame.K_RETURN:  # ENTER only
+                selection = options[self.selected_index]
+                
+                if self.state == "MAIN":
+                    if selection == "OPTIONS":
+                        self.state = "OPTIONS"
+                        self.selected_index = 0
+                        return None
+                    return selection # START, QUIT
+                
+                elif self.state == "OPTIONS":
+                    if "SOUND" in selection:
+                        self.sound_on = not self.sound_on
+                    elif "GRAPHICS" in selection:
+                        self.graphics_high = not self.graphics_high
+                    elif selection == "GUIDE":
+                        return "GUIDE" # Trigger guide state
+                    elif selection == "BACK":
+                        self.state = "MAIN"
+                        self.selected_index = 0
+            elif event.key == pygame.K_ESCAPE:
+                if self.state == "OPTIONS":
+                    self.state = "MAIN"
+                    self.selected_index = 0
+        return None
+
+# --- Pause Menu ---
+class PauseMenu:
+    def __init__(self):
+        self.options = ["RESUME", "GUIDE", "RESTART", "EXIT"]
+        self.selected_index = 0
+        
+    def handle_event(self, event):
+        if event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_UP:
+                self.selected_index = (self.selected_index - 1) % len(self.options)
+            elif event.key == pygame.K_DOWN:
+                self.selected_index = (self.selected_index + 1) % len(self.options)
+            elif event.key == pygame.K_RETURN:  # ENTER only
+                return self.options[self.selected_index]
+        return None
+
+    def draw(self, screen):
+        # Semi-transparent overlay
+        overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 180))
+        screen.blit(overlay, (0, 0))
+
+        # Title
+        title = ASSETS['font_large'].render("PAUSED", True, COLOR_WHITE)
+        title_rect = title.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 - 120))
+        screen.blit(title, title_rect)
+
+        # Buttons with filled style
+        btn_width = 180
+        btn_height = 45
+        btn_y_start = SCREEN_HEIGHT // 2 - 40
+        btn_spacing = 55
+        
+        for i, option in enumerate(self.options):
+            btn_x = SCREEN_WIDTH // 2 - btn_width // 2
+            btn_y = btn_y_start + (i * btn_spacing)
+            btn_rect = pygame.Rect(btn_x, btn_y, btn_width, btn_height)
+            
+            is_selected = (i == self.selected_index)
+            
+            if is_selected:
+                pygame.draw.rect(screen, (180, 50, 50), btn_rect)
+                pygame.draw.rect(screen, (255, 100, 100), btn_rect, 3)
+                text_color = (255, 255, 255)
+            else:
+                pygame.draw.rect(screen, (40, 40, 50), btn_rect)
+                pygame.draw.rect(screen, (80, 80, 100), btn_rect, 2)
+                text_color = (150, 150, 150)
+            
+            text = ASSETS['font'].render(option, True, text_color)
+            rect = text.get_rect(center=btn_rect.center)
+            screen.blit(text, rect)
+
+    def draw_guide(self, screen):
+
+        # Semi-transparent dark overlay
+        overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
+        overlay.fill((5, 5, 10, 250)) 
+        screen.blit(overlay, (0,0))
+         
+        # Title
+        title = ASSETS['font_large'].render("HOW TO PLAY", True, (100, 255, 100))
+        screen.blit(title, (SCREEN_WIDTH//2 - title.get_width()//2, 15))
+         
+        # --- Helper: Draw Pixel Key ---
+        def draw_key(x, y, text, width=None):
+            font = ASSETS['font']
+            text_surf = font.render(text, True, (0, 0, 0))
+            if width is None:
+                width = text_surf.get_width() + 12
+            height = 22
+            
+            # Key Body
+            rect = pygame.Rect(x, y, width, height)
+            pygame.draw.rect(screen, (200, 200, 200), rect)
+            pygame.draw.rect(screen, (100, 100, 100), rect, 2)
+            pygame.draw.line(screen, (50, 50, 50), (rect.left, rect.bottom), (rect.right, rect.bottom), 2)
+            
+            # Text
+            text_rect = text_surf.get_rect(center=rect.center)
+            screen.blit(text_surf, text_rect)
+            return rect.width
+
+        # Layout constants
+        LEFT_COL = 60  # Left column for icons/keys
+        TEXT_COL = 130  # Text column start
+        ROW_HEIGHT = 28
+
+        # --- Section 1: Controls ---
+        y = 60
+        sec_title = ASSETS['font'].render("- CONTROLS -", True, (100, 255, 100))
+        screen.blit(sec_title, (SCREEN_WIDTH//2 - sec_title.get_width()//2, y))
+        y += 28
+        
+        # Row 1: Arrows
+        key_w = draw_key(LEFT_COL, y, "ARROWS")
+        screen.blit(ASSETS['font'].render("Move Snake", True, COLOR_WHITE), (LEFT_COL + key_w + 15, y + 3))
+        y += ROW_HEIGHT
+        
+        # Row 2: Space
+        key_w = draw_key(LEFT_COL, y, "SPACE")
+        screen.blit(ASSETS['font'].render("Shoot (Costs Length)", True, COLOR_WHITE), (LEFT_COL + key_w + 15, y + 3))
+        y += ROW_HEIGHT
+        
+        # Row 3: Esc
+        key_w = draw_key(LEFT_COL, y, "ESC")
+        screen.blit(ASSETS['font'].render("Pause / Back", True, COLOR_WHITE), (LEFT_COL + key_w + 15, y + 3))
+        y += ROW_HEIGHT
+        
+        # Aiming Tip
+        tip_text = ASSETS['font'].render("Hold SPACE to Aim:", True, (200, 200, 255))
+        screen.blit(tip_text, (LEFT_COL, y + 5))
+        # Visual: Dot + Line
+        vis_x = LEFT_COL + tip_text.get_width() + 20
+        pygame.draw.circle(screen, COLOR_PLAYER_GREEN, (vis_x, y + 12), 5)
+        pygame.draw.line(screen, (255, 50, 50), (vis_x + 5, y + 12), (vis_x + 50, y + 12), 2)
+        pygame.draw.circle(screen, (255, 50, 50), (vis_x + 50, y + 12), 3)
+
+        # --- Helper: Icon + Text Row ---
+        def draw_icon_row(y, icon_key, text_str, color):
+            icon = ASSETS.get(icon_key)
+            if icon:
+                screen.blit(icon, (LEFT_COL, y))
+            text = ASSETS['font'].render(text_str, True, color)
+            screen.blit(text, (LEFT_COL + GRID_SIZE + 10, y + 2))
+
+        # --- Section 2: Dots (Ammo) ---
+        y += 50  # More spacing before new section
+        sec_title = ASSETS['font'].render("- DOTS (AMMO) -", True, (255, 255, 100))
+        screen.blit(sec_title, (SCREEN_WIDTH//2 - sec_title.get_width()//2, y))
+        y += 30
+        draw_icon_row(y, 'dot_standard', "Red: Standard Ammo", (255, 100, 100))
+        y += 28
+        draw_icon_row(y, 'dot_charge', "Yellow: Penetrating Charge", (255, 255, 150))
+        y += 28
+        draw_icon_row(y, 'dot_shield', "Blue: Shield Point", (100, 200, 255))
+        
+        # --- Section 3: Enemies ---
+        y += 50  # More spacing before new section
+        sec_title = ASSETS['font'].render("- ENEMIES -", True, (255, 100, 100))
+        screen.blit(sec_title, (SCREEN_WIDTH//2 - sec_title.get_width()//2, y))
+        y += 30
+        draw_icon_row(y, 'virus_chaser', "Chaser: Moves horizontally", (255, 150, 150))
+        y += 28
+        draw_icon_row(y, 'virus_follower', "Follower: All directions", (255, 200, 100))
+        y += 28
+        draw_icon_row(y, 'barrier', "Wall: Blocks but shootable", (150, 150, 170))
+        
+        # --- Section 4: Mechanics ---
+        y += 50  # More spacing before new section
+        pygame.draw.line(screen, (50, 50, 100), (50, y), (SCREEN_WIDTH - 50, y), 1)
+        y += 15
+        
+        sec_title = ASSETS['font'].render("MECHANICS", True, (100, 255, 100))
+        screen.blit(sec_title, (SCREEN_WIDTH//2 - sec_title.get_width()//2, y))
+        y += 25
+        
+        # Mechanics rows - left aligned from LEFT_COL
+        mech_lines = [
+            ("COMBO:", "Kill fast [(3s) to chain!]", (200, 200, 200)),
+            ("BONUS:", "+20% Score per Stack", (255, 255, 0)),
+            ("POINTS:", "Chaser 150, Follower 100, Wall 10", (200, 200, 255)),
+        ]
+        for label, desc, color in mech_lines:
+            label_surf = ASSETS['font'].render(label, True, (150, 150, 150))
+            desc_surf = ASSETS['font'].render(desc, True, color)
+            screen.blit(label_surf, (LEFT_COL, y))
+            screen.blit(desc_surf, (LEFT_COL + label_surf.get_width() + 10, y))
+            y += 22
+        
+        # Footer
+        y += 10
+        footer = ASSETS['font'].render("Press ESC or ENTER to return", True, (80, 80, 80))
+        screen.blit(footer, (SCREEN_WIDTH//2 - footer.get_width()//2, y))
+
+# --- Game Over Menu ---
+class GameOverMenu:
+    def __init__(self):
+        self.options = ["RESTART", "MENU"]
+        self.selected_index = 0
+        
+    def handle_event(self, event):
+        if event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_UP:
+                self.selected_index = (self.selected_index - 1) % len(self.options)
+            elif event.key == pygame.K_DOWN:
+                self.selected_index = (self.selected_index + 1) % len(self.options)
+            elif event.key == pygame.K_RETURN:
+                return self.options[self.selected_index]
+        return None
+
+    def draw(self, screen):
+        # Buttons with filled style
+        btn_width = 200
+        btn_height = 50
+        btn_y_start = SCREEN_HEIGHT // 2 + 50
+        btn_spacing = 70
+        
+        for i, option in enumerate(self.options):
+            btn_x = SCREEN_WIDTH // 2 - btn_width // 2
+            btn_y = btn_y_start + (i * btn_spacing)
+            btn_rect = pygame.Rect(btn_x, btn_y, btn_width, btn_height)
+            
+            is_selected = (i == self.selected_index)
+            
+            if is_selected:
+                pygame.draw.rect(screen, (180, 50, 50), btn_rect)
+                pygame.draw.rect(screen, (255, 100, 100), btn_rect, 3)
+                text_color = (255, 255, 255)
+            else:
+                pygame.draw.rect(screen, (40, 40, 50), btn_rect)
+                pygame.draw.rect(screen, (80, 80, 100), btn_rect, 2)
+                text_color = (150, 150, 150)
+            
+            text = ASSETS['font'].render(option, True, text_color)
+            rect = text.get_rect(center=btn_rect.center)
+            screen.blit(text, rect)
+            
+        # Navigation hint
+        hint = ASSETS['font'].render("Use ARROWS to navigate, ENTER to select", True, (150, 150, 150))
+        screen.blit(hint, (SCREEN_WIDTH//2 - hint.get_width()//2, SCREEN_HEIGHT - 40))
+
+# --- Score System ---
 class Particle:
     def __init__(self, x, y, color, size, speed_range=(1, 4), life_range=(20, 40)):
         self.x = x
@@ -274,6 +758,9 @@ class ParticleSystem:
 
     def update(self):
         self.particles = [p for p in self.particles if p.update()]
+        # Limit total particles for Web Performance
+        if len(self.particles) > 150:
+            self.particles = self.particles[-150:]
 
     def draw(self, surface):
         for p in self.particles:
@@ -317,6 +804,8 @@ class Player:
         self.trail = [] # List of (x, y, type) for trail
         
         self.set_speed()
+        # Explicitly start the timer for the first time
+        pygame.time.set_timer(GAME_TICK, self.move_delay)
 
     def set_speed(self):
         length = len(self.body)
@@ -344,13 +833,12 @@ class Player:
         # Since we can't easily check if the timer is active, we can just set it if it's the __init__ phase.
         # But set_speed is called in __init__.
         
-        if pygame.time.get_ticks() < 500: # Increased startup window check
-             pygame.time.set_timer(GAME_TICK, delay)
-        elif pygame.time.get_ticks() > self.recoil_end_time:
-             pass
+
+        # Remove conditional check, rely on init or explicit calls
+        pass
 
     def get_visual_head_pos(self):
-        now = pygame.time.get_ticks()
+        now = get_game_time()
         time_since_move = now - self.last_move_time
         t = min(1.0, time_since_move / self.move_delay) if self.move_delay > 0 else 1.0
         
@@ -379,7 +867,7 @@ class Player:
         #    return
 
         # Check recoil reset
-        if self.recoil_end_time > 0 and pygame.time.get_ticks() > self.recoil_end_time:
+        if self.recoil_end_time > 0 and get_game_time() > self.recoil_end_time:
             self.recoil_end_time = 0
             self.set_speed()
 
@@ -389,7 +877,7 @@ class Player:
                 self.visual_body[i]["prev_x"] = segment["rect"].x * GRID_SIZE
                 self.visual_body[i]["prev_y"] = segment["rect"].y * GRID_SIZE
         
-        self.last_move_time = pygame.time.get_ticks()
+        self.last_move_time = get_game_time()
 
         head = self.get_head()
         new_head_rect = pygame.Rect(head.x + self.dx, head.y + self.dy, 1, 1)
@@ -556,7 +1044,7 @@ class Player:
 
     def draw(self, surface):
         # Calculate interpolation progress
-        now = pygame.time.get_ticks()
+        now = get_game_time()
         time_since_move = now - self.last_move_time
         t = min(1.0, time_since_move / self.move_delay) if self.move_delay > 0 else 1.0
         
@@ -817,10 +1305,10 @@ class InterpolatedSprite(pygame.sprite.Sprite):
         self.prev_y = self.rect.y
         self.rect.x = self.grid_x * GRID_SIZE
         self.rect.y = self.grid_y * GRID_SIZE
-        self.last_move_time = pygame.time.get_ticks()
+        self.last_move_time = get_game_time()
 
     def get_draw_pos(self):
-        now = pygame.time.get_ticks()
+        now = get_game_time()
         time_since_move = now - self.last_move_time
         t = min(1.0, time_since_move / self.move_delay) if self.move_delay > 0 else 1.0
         
@@ -1112,7 +1600,7 @@ class FloatingText:
         self.x = x
         self.y = y
         self.color = color
-        self.creation_time = pygame.time.get_ticks()
+        self.creation_time = get_game_time()
         self.duration = duration
         self.alpha = 255
         self.font = pygame.font.Font(None, size)
@@ -1120,7 +1608,7 @@ class FloatingText:
              self.font = ASSETS['font']
 
     def update(self):
-        now = pygame.time.get_ticks()
+        now = get_game_time()
         elapsed = now - self.creation_time
         if elapsed > self.duration:
             return False
@@ -1146,7 +1634,7 @@ class ScoreSystem:
         self.splash_messages = [] # For top right
 
     def add_score(self, points, enemy_type, pos):
-        now = pygame.time.get_ticks()
+        now = get_game_time()
         
         # Combo Logic
         if now < self.combo_timer:
@@ -1204,8 +1692,8 @@ class ScoreSystem:
             ft.draw(surface)
             
         # Draw Combo Bar/Timer if active
-        if pygame.time.get_ticks() < self.combo_timer:
-            time_left = self.combo_timer - pygame.time.get_ticks()
+        if get_game_time() < self.combo_timer:
+            time_left = self.combo_timer - get_game_time()
             ratio = time_left / self.combo_duration
             
             # Draw combo bar at top left
@@ -1221,6 +1709,7 @@ class ScoreSystem:
 
 # --- Fungsi Game Utama ---
 async def main():
+    global GAME_TIME_OFFSET, GAME_PAUSE_START, GAME_IS_PAUSED
     pygame.init()
     screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
     pygame.display.set_caption("DOTSNAKE - Project Edition")
@@ -1230,6 +1719,12 @@ async def main():
     
     font = ASSETS.get('font', pygame.font.Font(None, 24))
     font_large = ASSETS.get('font_large', pygame.font.Font(None, 48))
+    
+    # Pre-render static HUD text for performance
+    hud_lives_label = font.render("LIVES:", True, COLOR_WHITE)
+    hud_shield_label = font.render("SHIELD:", True, COLOR_WHITE)
+    hud_ammo_label = font.render("NEXT:", True, COLOR_WHITE)
+    hud_empty_text = font.render("EMPTY", True, (100, 100, 100))
     
     particle_system = ParticleSystem()
     player = Player(particle_system)
@@ -1265,30 +1760,231 @@ async def main():
     max_level = len(level_definitions)
 
     initial_spawn_delay = level_definitions[current_level]["spawn_delay"]
-    pygame.time.set_timer(SPAWN_ENEMY, initial_spawn_delay)
-    pygame.time.set_timer(SPAWN_PICKUP, 4000) # Reduced drop rate
+    # DISABLED: Using delta-time accumulators instead of pygame timers for web compatibility
+    # pygame.time.set_timer(SPAWN_ENEMY, initial_spawn_delay)
+    # pygame.time.set_timer(SPAWN_PICKUP, 4000)
 
     current_world_speed = INITIAL_WORLD_SPEED 
-    pygame.time.set_timer(WORLD_TICK, current_world_speed)
+    # pygame.time.set_timer(WORLD_TICK, current_world_speed)
 
-    running = True
-    game_state = "PLAYING"
+    menu = Menu()
+    pause_menu = PauseMenu()
+    game_over_menu = GameOverMenu()
     score_system = ScoreSystem()
     bg_y = 0
     
+    running = True
+    game_state = "MENU" # Start in Menu
+    previous_game_state = "MENU" # For guide return handling
+    
     game_over_timer = 0
+    game_over_timer = 0
+    game_start_splash_timer = 0
+    pause_start_time = 0 
+    frozen_screen = None # For snapshot freeze logic
+    pause_start_time = 0  # Track when pause started for interpolation freeze
+    pause_cooldown_timer = 0 # Prevent spamming pause (exploit fix)
+    
+    # Transition animation
+    wipe_progress = 0.0
+    WIPE_DURATION = 500  # ms
+    wipe_start_time = 0
     
     dt = 0
+    
+    # Delta-time accumulators for web compatibility
+    # pygame.time.set_timer doesn't work reliably in WASM
+    game_tick_acc = 0.0
+    world_tick_acc = 0.0
+    spawn_enemy_acc = 0.0
+    spawn_pickup_acc = 0.0
+    current_spawn_delay = initial_spawn_delay
     while running:
         dt_ms = clock.tick(60)
         dt = dt_ms / 1000.0
+        
+        # Cap dt to prevent spiral of death on slow frames
+        if dt > 0.1:
+            dt = 0.1
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
             
-            if game_state == "PLAYING":
+            elif game_state == "MENU":
+                action = menu.handle_event(event)
+                if action == "START":
+                    game_state = "TRANSITION"
+                    wipe_progress = 0.0
+                    wipe_start_time = pygame.time.get_ticks()
+                    
+                    # Start Game Time at 0 (Normalize)
+                    GAME_IS_PAUSED = False
+                    GAME_TIME_OFFSET = pygame.time.get_ticks()
+                elif action == "GUIDE":
+                    previous_game_state = "MENU"
+                    game_state = "PAUSE_GUIDE"
+                elif action == "QUIT":
+                    running = False
+
+            elif game_state == "PAUSED":
+                action = pause_menu.handle_event(event)
+                if action == "RESUME":
+                    game_state = "PLAYING"
+                    pause_menu.selected_index = 0
+                    
+                    # Clean Global Time Resume
+                    GAME_IS_PAUSED = False
+                    GAME_TIME_OFFSET += (pygame.time.get_ticks() - GAME_PAUSE_START)
+                    
+                    
+                    # Reset accumulators helps prevent logic catch-up spikes - WAIT! This CAUSES the exploit!
+                    # If we reset to 0, we erase partial progress. Spamming pause = infinite delay!
+                    # We MUST preserve accumulators.
+                    # game_tick_acc = 0.0
+                    # world_tick_acc = 0.0
+                elif action == "GUIDE":
+                    previous_game_state = "PAUSED"
+                    game_state = "PAUSE_GUIDE"
+                elif action == "RESTART":
+                    # Reset Game Logic (Complete Restart)
+                    particle_system.particles.clear()
+                    player = Player(particle_system)
+                    enemies.empty()
+                    obstacles.empty()
+                    pickups.empty()
+                    standard_bullets.empty()
+                    charge_bullets.empty()
+                    all_bullets.empty()
+                    all_sprites.empty()
+                    enemies_list.clear()
+                    obstacles_list.clear()
+                    pickups_list.clear()
+                    score_system = ScoreSystem()
+                    current_level = 1
+                    world_ticks_elapsed = 0
+                    current_world_speed = INITIAL_WORLD_SPEED
+                    pygame.time.set_timer(WORLD_TICK, current_world_speed)
+                    pygame.time.set_timer(SPAWN_ENEMY, level_definitions[1]["spawn_delay"])
+                    pause_menu.selected_index = 0
+                    game_state = "PLAYING"
+                    
+                    # Clean Global Time Restart
+                    GAME_IS_PAUSED = False
+                    GAME_TIME_OFFSET = 0 # New game, fresh time
+                    
+                    game_tick_acc = 0.0
+                    world_tick_acc = 0.0
+                    
+                elif action == "EXIT":
+                    # Full reset before going to menu
+                    GAME_IS_PAUSED = False # CRITICAL FIX: Unpause global time
+                    GAME_TIME_OFFSET = 0
+                    
+                    particle_system.particles.clear()
+                    player = Player(particle_system)
+                    enemies.empty()
+                    obstacles.empty()
+                    pickups.empty()
+                    standard_bullets.empty()
+                    charge_bullets.empty()
+                    all_bullets.empty()
+                    all_sprites.empty()
+                    enemies_list.clear()
+                    obstacles_list.clear()
+                    pickups_list.clear()
+                    score_system = ScoreSystem()
+                    current_level = 1
+                    world_ticks_elapsed = 0
+                    current_world_speed = INITIAL_WORLD_SPEED
+                    pygame.time.set_timer(WORLD_TICK, current_world_speed)
+                    pygame.time.set_timer(SPAWN_ENEMY, level_definitions[1]["spawn_delay"])
+                    pause_menu.selected_index = 0
+                    menu.selected_index = 0
+                    game_state = "MENU"
+                
+                elif event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                    if pygame.time.get_ticks() > pause_cooldown_timer:
+                        pause_cooldown_timer = pygame.time.get_ticks() + 300 # 300ms cooldown
+                        
+                        pause_menu.selected_index = 0
+                        game_state = "PLAYING"
+                    
+                    # Clean Global Time Resume
+                    GAME_IS_PAUSED = False
+                    GAME_TIME_OFFSET += (pygame.time.get_ticks() - GAME_PAUSE_START)
+                    
+                    # game_tick_acc = 0.0
+                    # world_tick_acc = 0.0
+
+            elif game_state == "PAUSE_GUIDE":
                 if event.type == pygame.KEYDOWN:
-                    if event.key == pygame.K_SPACE:
+                    if event.key == pygame.K_ESCAPE or event.key == pygame.K_RETURN:
+                        game_state = previous_game_state
+            
+            elif game_state == "GAME_OVER":
+                action = game_over_menu.handle_event(event)
+                if action == "RESTART":
+                    # Full Reset and Start
+                    particle_system.particles.clear()
+                    player = Player(particle_system)
+                    enemies.empty()
+                    obstacles.empty()
+                    pickups.empty()
+                    standard_bullets.empty()
+                    charge_bullets.empty()
+                    all_bullets.empty()
+                    all_sprites.empty()
+                    enemies_list.clear()
+                    obstacles_list.clear()
+                    pickups_list.clear()
+                    
+                    score_system = ScoreSystem()
+                    current_level = 1
+                    world_ticks_elapsed = 0
+                    current_world_speed = INITIAL_WORLD_SPEED
+                    pygame.time.set_timer(WORLD_TICK, current_world_speed)
+                    pygame.time.set_timer(SPAWN_ENEMY, level_definitions[1]["spawn_delay"])
+                    
+                    game_state = "PLAYING"
+                    game_start_splash_timer = get_game_time() + 2000 # 2s splash
+                    
+                elif action == "MENU":
+                    # Full Reset and Go to Menu
+                    particle_system.particles.clear()
+                    player = Player(particle_system)
+                    enemies.empty()
+                    obstacles.empty()
+                    pickups.empty()
+                    standard_bullets.empty()
+                    charge_bullets.empty()
+                    all_bullets.empty()
+                    all_sprites.empty()
+                    enemies_list.clear()
+                    obstacles_list.clear()
+                    pickups_list.clear()
+                    
+                    score_system = ScoreSystem()
+                    current_level = 1
+                    world_ticks_elapsed = 0
+                    current_world_speed = INITIAL_WORLD_SPEED
+                    pygame.time.set_timer(WORLD_TICK, current_world_speed)
+                    pygame.time.set_timer(SPAWN_ENEMY, level_definitions[1]["spawn_delay"])
+                    
+                    menu.state = "MAIN"
+                    menu.selected_index = 0
+                    game_state = "MENU"
+
+            elif game_state == "PLAYING":
+                if event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_ESCAPE:
+                        if pygame.time.get_ticks() > pause_cooldown_timer:
+                            pause_cooldown_timer = pygame.time.get_ticks() + 300 # 300ms cooldown
+                            
+                            frozen_screen = screen.copy() # CAPTURE SNAPSHOT
+                            game_state = "PAUSED"
+                            GAME_IS_PAUSED = True
+                            GAME_PAUSE_START = pygame.time.get_ticks()
+                    elif event.key == pygame.K_SPACE:
                         player.is_aiming = True
                     elif event.key == pygame.K_LEFT and player.dx != 1:
                         player.dx = -1; player.dy = 0
@@ -1305,112 +2001,130 @@ async def main():
                             player.shoot(all_sprites, standard_bullets, charge_bullets, all_bullets)
                             player.is_aiming = False
 
-                if event.type == GAME_TICK:
-                    game_result = player.move() 
-                    # Reset timer to current speed (in case it changed due to growth/recoil end)
-                    # This ensures the next tick happens at the correct interval from NOW.
-                    pygame.time.set_timer(GAME_TICK, player.move_delay)
-                    
-                    if game_result == "GAME_OVER":
-                        game_state = "DYING"
-                        game_over_timer = pygame.time.get_ticks() + 1500 # 1.5s delay
+                # OLD TIMER EVENTS - DISABLED (using delta-time accumulators instead)
+                # These were causing double-speed gameplay on web
+                # if event.type == GAME_TICK:
+                # if event.type == WORLD_TICK:
+                # if event.type == SPAWN_ENEMY:
+                # if event.type == SPAWN_PICKUP:
 
-                if event.type == WORLD_TICK:
-                    world_ticks_elapsed += 1
-                    
-                    # Update World Entities with move=True
-                    for e in enemies_list: e.update(move=True)
-                    for o in obstacles_list: o.update(move=True)
-                    for p in pickups_list: p.update(move=True)
-                    
-                    score_system.score += (1 * player.get_body_length())
-                    
-                    if world_ticks_elapsed % SCORE_MILESTONE == 0 and world_ticks_elapsed > 0:
-                        if current_world_speed > MIN_WORLD_SPEED:
-                            current_world_speed -= SPEED_INCREASE_AMOUNT
-                            if current_world_speed < MIN_WORLD_SPEED:
-                                current_world_speed = MIN_WORLD_SPEED
-                            pygame.time.set_timer(WORLD_TICK, current_world_speed)
-                            print(f"SPEED UP! New world delay: {current_world_speed}ms")
-                            
-                            # Update delay for interpolation
-                            for e in enemies_list: e.move_delay = current_world_speed
-                            for o in obstacles_list: o.move_delay = current_world_speed
-                            for p in pickups_list: p.move_delay = current_world_speed * p.move_threshold
-
-                    if world_ticks_elapsed % LEVEL_DURATION_TICKS == 0 and world_ticks_elapsed > 0:
-                        if current_level < max_level:
-                            current_level += 1
-                            print(f"--- LEVEL UP! MENCAPAI LEVEL {current_level} ---")
-                            new_spawn_delay = level_definitions[current_level]["spawn_delay"]
-                            pygame.time.set_timer(SPAWN_ENEMY, new_spawn_delay)
-
-                if event.type == SPAWN_ENEMY:
-                    chances = level_definitions[current_level]["chances"]
-                    enemy_type = random.choices(
-                        ["chaser", "wall", "follower"],
-                        weights=[chances["chaser"], chances["wall"], chances["follower"]],
-                        k=1
-                    )[0]
-                    
-                    new_entities = []
-                    
-                    if enemy_type == "chaser":
-                        new_entities.append(Chaser(player))
-                    elif enemy_type == "follower":
-                        new_entities.append(Follower(player))
-                    elif enemy_type == "wall":
-                        # Advanced Wall Patterns (Short Rows & Clusters)
-                        pattern = random.choice(["short_row", "cluster", "scattered_small"])
-                        
-                        if pattern == "short_row":
-                            # Horizontal row, max length 10
-                            row_len = random.randint(3, 10)
-                            start_x = random.randint(1, GRID_WIDTH - row_len - 1)
-                            for x in range(row_len):
-                                new_entities.append(CrackedWall(start_x + x, -1))
-                                    
-                        elif pattern == "cluster":
-                            # Spawn a block of walls
-                            cluster_w = random.randint(3, 6)
-                            cluster_h = random.randint(2, 4)
-                            start_x = random.randint(1, GRID_WIDTH - cluster_w - 1)
-                            
-                            for y_off in range(cluster_h):
-                                for x_off in range(cluster_w):
-                                    new_entities.append(CrackedWall(start_x + x_off, -1 - y_off))
-                                    
-                        elif pattern == "scattered_small":
-                             # A few random walls in a small area
-                             center_x = random.randint(5, GRID_WIDTH - 6)
-                             count = random.randint(3, 8)
-                             for _ in range(count):
-                                 off_x = random.randint(-4, 4)
-                                 off_y = random.randint(0, 3)
-                                 nx = center_x + off_x
-                                 if 0 <= nx < GRID_WIDTH:
-                                     new_entities.append(CrackedWall(nx, -1 - off_y))
-
-                    for entity in new_entities:
-                        entity.move_delay = current_world_speed
-                        all_sprites.add(entity)
-                        if isinstance(entity, CrackedWall):
-                            obstacles.add(entity)
-                            obstacles_list.append(entity)
-                        else:
-                            enemies.add(entity)
-                            enemies_list.append(entity)
-
-                if event.type == SPAWN_PICKUP:
-                    new_pickup = DotPickup()
-                    new_pickup.move_delay = current_world_speed * new_pickup.move_threshold
-                    pickups.add(new_pickup)
-                    pickups_list.append(new_pickup)
-                    all_sprites.add(new_pickup)
+                if action == "QUIT":
+                    running = False
 
         if game_state == "PLAYING":
+            # --- Delta-time accumulator-based timing (Web Compatible) ---
+            # This replaces pygame.time.set_timer which doesn't work in WASM
+            dt_ms_float = dt * 1000.0  # Convert to milliseconds
+            
+            # GAME_TICK - Player movement
+            game_tick_acc += dt_ms_float
+            if game_tick_acc >= player.move_delay:
+                game_tick_acc -= player.move_delay
+                game_result = player.move()
+                if game_result == "GAME_OVER":
+                    game_state = "DYING"
+                    game_over_timer = pygame.time.get_ticks() + 1500
+            
+            # WORLD_TICK - Enemy/World movement
+            world_tick_acc += dt_ms_float
+            if world_tick_acc >= current_world_speed:
+                world_tick_acc -= current_world_speed
+                world_ticks_elapsed += 1
+                
+                # Update World Entities with move=True
+                for e in enemies_list: e.update(move=True)
+                for o in obstacles_list: o.update(move=True)
+                for p in pickups_list: p.update(move=True)
+                
+                score_system.score += (1 * player.get_body_length())
+                
+                if world_ticks_elapsed % SCORE_MILESTONE == 0 and world_ticks_elapsed > 0:
+                    if current_world_speed > MIN_WORLD_SPEED:
+                        current_world_speed -= SPEED_INCREASE_AMOUNT
+                        if current_world_speed < MIN_WORLD_SPEED:
+                            current_world_speed = MIN_WORLD_SPEED
+                        print(f"SPEED UP! New world delay: {current_world_speed}ms")
+                        
+                        # Update delay for interpolation
+                        for e in enemies_list: e.move_delay = current_world_speed
+                        for o in obstacles_list: o.move_delay = current_world_speed
+                        for p in pickups_list: p.move_delay = current_world_speed * p.move_threshold
+
+                if world_ticks_elapsed % LEVEL_DURATION_TICKS == 0 and world_ticks_elapsed > 0:
+                    if current_level < max_level:
+                        current_level += 1
+                        print(f"--- LEVEL UP! MENCAPAI LEVEL {current_level} ---")
+                        current_spawn_delay = level_definitions[current_level]["spawn_delay"]
+            
+            # SPAWN_ENEMY
+            spawn_enemy_acc += dt_ms_float
+            if spawn_enemy_acc >= current_spawn_delay:
+                spawn_enemy_acc -= current_spawn_delay
+                
+                chances = level_definitions[current_level]["chances"]
+                enemy_type = random.choices(
+                    ["chaser", "wall", "follower"],
+                    weights=[chances["chaser"], chances["wall"], chances["follower"]],
+                    k=1
+                )[0]
+                
+                new_entities = []
+                
+                if enemy_type == "chaser":
+                    new_entities.append(Chaser(player))
+                elif enemy_type == "follower":
+                    new_entities.append(Follower(player))
+                elif enemy_type == "wall":
+                    pattern = random.choice(["short_row", "cluster", "scattered_small"])
+                    
+                    if pattern == "short_row":
+                        row_len = random.randint(3, 10)
+                        start_x = random.randint(1, GRID_WIDTH - row_len - 1)
+                        for x in range(row_len):
+                            new_entities.append(CrackedWall(start_x + x, -1))
+                                    
+                    elif pattern == "cluster":
+                        cluster_w = random.randint(3, 6)
+                        cluster_h = random.randint(2, 4)
+                        start_x = random.randint(1, GRID_WIDTH - cluster_w - 1)
+                        
+                        for y_off in range(cluster_h):
+                            for x_off in range(cluster_w):
+                                new_entities.append(CrackedWall(start_x + x_off, -1 - y_off))
+                                    
+                    elif pattern == "scattered_small":
+                         center_x = random.randint(5, GRID_WIDTH - 6)
+                         count = random.randint(3, 8)
+                         for _ in range(count):
+                             off_x = random.randint(-4, 4)
+                             off_y = random.randint(0, 3)
+                             nx = center_x + off_x
+                             if 0 <= nx < GRID_WIDTH:
+                                 new_entities.append(CrackedWall(nx, -1 - off_y))
+
+                for entity in new_entities:
+                    entity.move_delay = current_world_speed
+                    all_sprites.add(entity)
+                    if isinstance(entity, CrackedWall):
+                        obstacles.add(entity)
+                        obstacles_list.append(entity)
+                    else:
+                        enemies.add(entity)
+                        enemies_list.append(entity)
+
+            # SPAWN_PICKUP
+            spawn_pickup_acc += dt_ms_float
+            if spawn_pickup_acc >= 4000:  # 4 second interval
+                spawn_pickup_acc -= 4000
+                new_pickup = DotPickup()
+                new_pickup.move_delay = current_world_speed * new_pickup.move_threshold
+                pickups.add(new_pickup)
+                pickups_list.append(new_pickup)
+                all_sprites.add(new_pickup)
+            
+            # --- End Accumulator Logic ---
+            
             all_bullets.update(dt)
-            # Update animations (no movement)
             # Update animations (no movement)
             head_pos_px = (player.get_head().x * GRID_SIZE + GRID_SIZE//2, player.get_head().y * GRID_SIZE + GRID_SIZE//2)
             for p in pickups_list: p.update(move=False, player_head_pos=head_pos_px)
@@ -1530,8 +2244,34 @@ async def main():
             bg_y = (bg_y + 2) % SCREEN_HEIGHT
             screen.blit(ASSETS['background'], (0, bg_y))
             screen.blit(ASSETS['background'], (0, bg_y - SCREEN_HEIGHT))
+        
+        # Update menu demo snake
+        if game_state == "MENU" or (game_state == "PAUSE_GUIDE" and previous_game_state == "MENU"):
+            if game_state == "MENU":
+                menu.update(dt_ms)
+            menu.draw(screen)
+            if game_state == "PAUSE_GUIDE":
+                pause_menu.draw_guide(screen)
+        
+        # TRANSITION: Wipe animation
+        if game_state == "TRANSITION":
+            # Update wipe progress
+            elapsed = pygame.time.get_ticks() - wipe_start_time
+            wipe_progress = min(1.0, elapsed / WIPE_DURATION)
             
-        if game_state == "PLAYING" or game_state == "DYING":
+            # Draw menu behind wipe (frozen)
+            menu.draw(screen)
+            
+            # Draw wipe (black rectangle from top)
+            wipe_height = int(SCREEN_HEIGHT * wipe_progress)
+            pygame.draw.rect(screen, COLOR_BLACK, (0, 0, SCREEN_WIDTH, wipe_height))
+            
+            # When wipe complete, start game
+            if wipe_progress >= 1.0:
+                game_state = "PLAYING"
+                game_start_splash_timer = get_game_time() + 2000 # Set splash timer here!
+
+        if game_state in ["PLAYING", "DYING"]:
             # Draw Bullets (Standard sprite draw)
             all_bullets.draw(screen)
             
@@ -1543,9 +2283,8 @@ async def main():
             for p in pickups_list:
                 p.draw(screen)
                 
-            if game_state == "PLAYING":
-                player.draw(screen)
-                player.draw_reticle_raycast(screen, enemies, obstacles)
+            player.draw(screen)
+            player.draw_reticle_raycast(screen, enemies, obstacles)
             
             score_system.draw(screen, font)
             particle_system.draw(screen)
@@ -1564,20 +2303,17 @@ async def main():
 
             # Center: Lives & Shield
             # Lives
-            lives_label = font.render("LIVES:", True, COLOR_WHITE)
-            screen.blit(lives_label, (300, SCREEN_HEIGHT - HUD_HEIGHT + 25))
+            screen.blit(hud_lives_label, (300, SCREEN_HEIGHT - HUD_HEIGHT + 25))
             for i in range(player.lives):
                 pygame.draw.circle(screen, COLOR_PLAYER_GREEN, (420 + (i * 25), SCREEN_HEIGHT - HUD_HEIGHT + 33), 8)
 
             # Shield
-            shield_label = font.render("SHIELD:", True, COLOR_WHITE)
-            screen.blit(shield_label, (300, SCREEN_HEIGHT - HUD_HEIGHT + 50))
+            screen.blit(hud_shield_label, (300, SCREEN_HEIGHT - HUD_HEIGHT + 50))
             for i in range(player.shields):
                 pygame.draw.circle(screen, COLOR_DOT_BLUE, (420 + (i * 25), SCREEN_HEIGHT - HUD_HEIGHT + 58), 6)
 
             # Right: Next Ammo
-            ammo_label = font.render("NEXT:", True, COLOR_WHITE)
-            screen.blit(ammo_label, (600, SCREEN_HEIGHT - HUD_HEIGHT + 38))
+            screen.blit(hud_ammo_label, (600, SCREEN_HEIGHT - HUD_HEIGHT + 38))
             
             next_ammo = player.get_next_ammo()
             if next_ammo:
@@ -1595,47 +2331,47 @@ async def main():
                     label_text = font.render(label, True, (200, 200, 200))
                     screen.blit(label_text, (710, SCREEN_HEIGHT - HUD_HEIGHT + 38))
             else:
-                empty_text = font.render("EMPTY", True, (100, 100, 100))
-                screen.blit(empty_text, (680, SCREEN_HEIGHT - HUD_HEIGHT + 38))
+                screen.blit(hud_empty_text, (680, SCREEN_HEIGHT - HUD_HEIGHT + 38))
+            
+            # Draw Game Start Splash
+            if game_start_splash_timer > get_game_time():
+                 splash_surf = font_large.render("GAME START!", True, (100, 255, 100))
+                 rect = splash_surf.get_rect(center=(SCREEN_WIDTH//2, SCREEN_HEIGHT//2))
+                 # Add black outline for visibility
+                 outline = font_large.render("GAME START!", True, (0, 0, 0))
+                 screen.blit(outline, (rect.x-2, rect.y-2))
+                 screen.blit(outline, (rect.x+2, rect.y+2))
+                 screen.blit(splash_surf, rect)
+
+        elif game_state == "PAUSED":
+            if frozen_screen:
+                screen.blit(frozen_screen, (0,0))
+            else:
+                # Fallback if frozen screen missing
+                screen.fill(COLOR_BLACK)
+                
+            pause_menu.draw(screen)
+
+        elif game_state == "PAUSE_GUIDE":
+            if previous_game_state == "PAUSED":
+                if frozen_screen:
+                    screen.blit(frozen_screen, (0,0))
+            elif previous_game_state == "MENU":
+                # Draw menu background (frozen logic)
+                menu.draw(screen)
+            
+            pause_menu.draw_guide(screen)
 
         elif game_state == "GAME_OVER":
             game_over_text = font_large.render("GAME OVER", True, (255, 50, 50))
-            text_rect = game_over_text.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 - 20))
+            text_rect = game_over_text.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 - 80))
             screen.blit(game_over_text, text_rect)
             
             final_score_text = font.render(f"Final Score: {score_system.score}", True, COLOR_WHITE)
-            score_rect = final_score_text.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 + 30))
+            score_rect = final_score_text.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 - 30))
             screen.blit(final_score_text, score_rect)
             
-            restart_text = font.render("Press R to Restart", True, (200, 200, 200))
-            restart_rect = restart_text.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 + 70))
-            screen.blit(restart_text, restart_rect)
-            
-            keys = pygame.key.get_pressed()
-            if keys[pygame.K_r]:
-                # Reset Game
-                particle_system.particles.clear()
-                player = Player(particle_system)
-                enemies.empty()
-                obstacles.empty()
-                pickups.empty()
-                standard_bullets.empty()
-                charge_bullets.empty()
-                all_bullets.empty()
-                all_sprites.empty()
-                
-                enemies_list.clear()
-                obstacles_list.clear()
-                pickups_list.clear()
-                
-                score_system = ScoreSystem()
-                current_level = 1
-                world_ticks_elapsed = 0
-                current_world_speed = INITIAL_WORLD_SPEED
-                pygame.time.set_timer(WORLD_TICK, current_world_speed)
-                pygame.time.set_timer(SPAWN_ENEMY, level_definitions[1]["spawn_delay"])
-                
-                game_state = "PLAYING"
+            game_over_menu.draw(screen)
 
         pygame.display.flip()
         await asyncio.sleep(0)
