@@ -1,30 +1,17 @@
-import http.server
-import socketserver
-import os
-import mimetypes
+import subprocess
+import sys
 
-# FORCE correct MIME type for WASM
-mimetypes.init()
-mimetypes.add_type('application/wasm', '.wasm')
+# Use pygbag's built-in server which handles CDN routing correctly
+# The simple HTTP server doesn't route CDN requests properly
+print("Starting pygbag development server...")
+print("The game will open at http://localhost:8000")
+print("Press Ctrl+C to stop.\n")
 
-PORT = 8000
-DIRECTORY = "build/web"
-
-class Handler(http.server.SimpleHTTPRequestHandler):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, directory=DIRECTORY, **kwargs)
-
-    def end_headers(self):
-        # Disable strict headers to allow CDN to function
-        # self.send_header("Cross-Origin-Opener-Policy", "same-origin")
-        # self.send_header("Cross-Origin-Embedder-Policy", "require-corp")
-        super().end_headers()
-
-print(f"Serving '{DIRECTORY}' at http://localhost:{PORT}")
-print("Press Ctrl+C to stop.")
-
-with socketserver.TCPServer(("", PORT), Handler) as httpd:
-    try:
-        httpd.serve_forever()
-    except KeyboardInterrupt:
-        print("\nServer stopped.")
+try:
+    # Run pygbag without --build flag to start its built-in dev server
+    subprocess.run([sys.executable, "-m", "pygbag", "main.py"], check=True)
+except subprocess.CalledProcessError as e:
+    print(f"Error running pygbag: {e}")
+    sys.exit(1)
+except KeyboardInterrupt:
+    print("\nServer stopped.")

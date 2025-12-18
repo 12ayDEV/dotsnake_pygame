@@ -657,6 +657,7 @@ class PauseMenu:
         
         # Mechanics rows - left aligned from LEFT_COL
         mech_lines = [
+            ("DANGER:", "Touching screen borders = Death!", (255, 80, 80)),
             ("COMBO:", "Kill fast [(3s) to chain!]", (200, 200, 200)),
             ("BONUS:", "+20% Score per Stack", (255, 255, 0)),
             ("POINTS:", "Chaser 150, Follower 100, Wall 10", (200, 200, 255)),
@@ -1016,6 +1017,10 @@ class Player:
         print(f"Nyawa tersisa: {self.lives}")
         
         if self.lives <= 0:
+            # Clear body so snake disappears and only explosion particles are visible
+            self.body = []
+            self.visual_body = []
+            self.trail = []
             return "GAME_OVER"
         
         # Respawn Logic
@@ -1034,13 +1039,12 @@ class Player:
                 "prev_x": segment["rect"].x * GRID_SIZE,
                 "prev_y": segment["rect"].y * GRID_SIZE
             })
-
         self.dx = 0
         self.dy = -1 
         self.set_speed()
         
-        # Set Respawn Timer (3 seconds invulnerability)
-        self.respawn_timer = pygame.time.get_ticks() + 3000
+        # Set Respawn Timer (2 seconds invulnerability)
+        self.respawn_timer = pygame.time.get_ticks() + 2000
 
     def draw(self, surface):
         # Calculate interpolation progress
@@ -1048,12 +1052,13 @@ class Player:
         time_since_move = now - self.last_move_time
         t = min(1.0, time_since_move / self.move_delay) if self.move_delay > 0 else 1.0
         
-        is_invincible = now < self.respawn_timer
+        # Check invincibility using raw pygame time (matches respawn_timer set in hit())
+        is_invincible = pygame.time.get_ticks() < self.respawn_timer
         show_body = True
         
         if is_invincible:
-            # Blink effect: Hide body on odd intervals
-            if (now // 100) % 2 != 0:
+            # Blink effect: Hide body on odd intervals (use raw ticks for consistency)
+            if (pygame.time.get_ticks() // 100) % 2 != 0:
                 show_body = False
             
             # Draw Shield Aura (Always visible when invincible)
@@ -1824,6 +1829,13 @@ async def main():
                     previous_game_state = "MENU"
                     game_state = "PAUSE_GUIDE"
                 elif action == "QUIT":
+                    # For web version, close the browser tab
+                    if sys.platform in ('emscripten', 'wasi'):
+                        try:
+                            import platform
+                            platform.window.close()
+                        except:
+                            pass
                     running = False
 
             elif game_state == "PAUSED":
